@@ -1,0 +1,105 @@
+#logs-header {
+    margin-top: 20px;
+}
+
+.preserve-whitespace {
+    white-space: pre-wrap;
+}
+
+video {
+    width: 100%;
+}
+
+pre .error {
+    color: red;
+}
+
+pre .warn {
+    color: goldenrod;
+}
+
+#logs {
+    height: 500px;
+    overflow: auto;
+}
+
+.analysis-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.analysis-metrics {
+    font-size: 0.9em;
+    color: #666;
+}
+
+.analysis-container {
+    margin-top: 15px;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 4px;
+    border: 1px solid #dee2e6;
+}
+
+#outputCanvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+    background: #000;
+    border: 1px solid #dee2e6;
+}
+
+.video-analysis-controls {
+    margin-top: 10px;
+    padding: 10px;
+    background: rgba(0,0,0,0.05);
+    border-radius: 4px;
+}
+
+.analysis-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+#analysisMetrics {
+    font-family: monospace;
+    font-size: 0.9em;
+    color: #666;
+    margin-top: 5px;
+    padding: 5px;
+    background: rgba(0,0,0,0.02);
+    border-radius: 3px;
+}
+
+.analysis-controls {
+    margin-top: 10px;
+}
+
+.analysis-container {
+    margin-top: 15px;
+}
+
+#processingCanvas {
+    display: none;
+}
+
+.remote-view {
+    width: 100%;
+    height: auto;
+}
+
+#canvasOutput {
+    width: 100%;
+    height: auto;
+    background-color: #000;
+    border: 1px solid #ddd;
+    display: block;
+}
+
+.video-container {
+    margin-bottom: 15px;
+    position: relative;
+}
