@@ -18,12 +18,35 @@
     <script>
         let cvReady = false;
         function onOpenCvReady() {
-            console.log('OpenCV.js is ready');
+            console.log('[VIEWER] OpenCV.js is ready');
             cvReady = true;
-            document.getElementById('enableVideoAnalysis').disabled = false;
+            // Log available OpenCV functions for debugging
+            console.log('[VIEWER] OpenCV methods:', Object.keys(cv));
         }
     </script>
-    <script async src="https://docs.opencv.org/4.11.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+    <script async src="https://docs.opencv.org/4.7.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+
+    <div class="debug-controls" style="position: absolute; top: 50px; left: 10px; z-index: 1000;">
+        <button onclick="toggleDebug()" class="btn btn-sm btn-info">Toggle Debug</button>
+    </div>
+
+    <script>
+    // Add debug toggle functionality
+    let debugEnabled = false;
+    function toggleDebug() {
+        debugEnabled = !debugEnabled;
+        if (debugEnabled) {
+            console.debug = console.log;
+        } else {
+            console.debug = function() {};
+        }
+        console.log('[VIEWER] Debug mode:', debugEnabled ? 'enabled' : 'disabled');
+    }
+
+    // Initially disable debug
+    console.debug = function() {};
+    </script>
+
     </head>
 <body>
 

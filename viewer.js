@@ -1041,9 +1041,27 @@ function addVideoControls() {
     document.getElementById('edgeMode').addEventListener('click', () => setVideoMode('edge'));
 }
 
-function setVideoMode(mode) {
-    console.log('[VIEWER] Switching video mode to:', mode);
+async function setVideoMode(mode) {
+    console.log('[VIEWER] Attempting to switch video mode to:', mode);
+
+    if (mode === 'edge') {
+        const ready = await isOpenCVReady();
+        if (!ready) {
+            console.error('[VIEWER] OpenCV is not ready');
+            alert('OpenCV is not ready yet. Please try again in a moment.');
+            return;
+        }
+
+        // Verify OpenCV functionality
+        if (!verifyOpenCV()) {
+            console.error('[VIEWER] OpenCV verification failed');
+            alert('OpenCV functionality test failed. Edge detection may not work correctly.');
+            return;
+        }
+    }
+
     videoProcessing.mode = mode;
+    console.log('[VIEWER] Mode switched to:', mode);
 
     // Update button states
     document.querySelectorAll('.video-controls .btn').forEach(btn => {
@@ -1060,13 +1078,36 @@ function startVideoProcessing(video, canvas) {
     processVideoFrame(video, canvas);
 }
 
+function verifyOpenCV() {
+    if (typeof cv === 'undefined') {
+        console.error('[VIEWER] OpenCV is not loaded');
+        return false;
+    }
 
-function setupVideoAnalysis(videoElement) {
+    try {
+        // Try to create a simple Mat
+        const testMat = new cv.Mat();
+        testMat.delete();
+        console.log('[VIEWER] OpenCV verification successful');
+        return true;
+    } catch (error) {
+        console.error('[VIEWER] OpenCV verification failed:', error);
+        return false;
+    }
+}
+
+async function setupVideoAnalysis(videoElement) {
     console.log('[VIEWER] Setting up video analysis');
     const canvas = document.getElementById('canvasOutput');
     if (!canvas) {
         console.error('[VIEWER] Canvas element not found');
         return;
+    }
+
+    // Wait for OpenCV to be ready
+    const ready = await isOpenCVReady();
+    if (!ready) {
+        console.warn('[VIEWER] OpenCV not ready, edge detection will be disabled initially');
     }
 
     // Set initial canvas size
@@ -1078,9 +1119,9 @@ function setupVideoAnalysis(videoElement) {
 
     // Start processing
     videoProcessing.active = true;
+    videoProcessing.mode = 'original';
     requestAnimationFrame(() => processVideoFrame(videoElement, canvas));
 }
-
 
 
 document.addEventListener('keydown', (event) => {
@@ -1093,69 +1134,125 @@ document.addEventListener('keydown', (event) => {
             break;
     }
 });
-
 function processVideoFrame(video, canvas) {
     if (!videoProcessing.active) {
-        console.log('[VIEWER] Video processing stopped');
         return;
     }
 
     try {
-        // Make sure video is playing and has dimensions
         if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
             requestAnimationFrame(() => processVideoFrame(video, canvas));
             return;
         }
 
-        // Update canvas size if needed
-        if (canvas.width !== video.videoWidth) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            console.debug('[VIEWER] Canvas resized to:', canvas.width, 'x', canvas.height);
-        }
-
         const ctx = canvas.getContext('2d');
-
-        // Always draw the original frame first
         ctx.drawImage(video, 0, 0);
 
-        // Only proceed with OpenCV processing if it's ready and edge mode is active
-        if (typeof cv !== 'undefined' && videoProcessing.mode === 'edge') {
-            try {
-                // Create a Mat from the canvas
-                let src = cv.imread(canvas);
+        if (cvReady && videoProcessing.mode === 'edge') {
+            let src = null;
+            let dst = null;
+            let gray = null;
 
-                // Create output matrix
-                let dst = new cv.Mat();
-                let gray = new cv.Mat();
-                let blurred = new cv.Mat();
+            try {
+                console.debug('[VIEWER] Starting edge detection processing');
+
+                // Get image data
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const dataSize = imageData.width * imageData.height * 4; // RGBA = 4 channels
+
+                console.debug('[VIEWER] Image data:', {
+                    width: imageData.width,
+                    height: imageData.height,
+                    dataSize: dataSize,
+                    actualDataLength: imageData.data.length
+                });
+
+                // Create source matrix
+                src = cv.matFromImageData(imageData);
+                console.debug('[VIEWER] Source matrix:', {
+                    rows: src.rows,
+                    cols: src.cols,
+                    type: src.type(),
+                    channels: src.channels(),
+                    empty: src.empty(),
+                    size: src.size()
+                });
+
+                // Create destination matrices
+                dst = new cv.Mat();
+                gray = new cv.Mat();
 
                 // Convert to grayscale
                 cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                console.debug('[VIEWER] Converted to grayscale');
 
                 // Apply Gaussian blur
-                let ksize = new cv.Size(5, 5);
-                cv.GaussianBlur(gray, blurred, ksize, 0, 0, cv.BORDER_DEFAULT);
+                cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+                console.debug('[VIEWER] Applied Gaussian blur');
 
                 // Apply Canny edge detection
-                cv.Canny(blurred, dst, 50, 150, 3, false);
+                cv.Canny(gray, dst, 50, 150, 3);
+                console.debug('[VIEWER] Applied Canny edge detection');
 
-                // Convert back to RGBA for display
+                // Convert single channel to RGBA for display
                 cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
+                console.debug('[VIEWER] Converted back to RGBA');
 
-                // Show the result on canvas
-                cv.imshow(canvas, dst);
+                // Verify destination matrix
+                console.debug('[VIEWER] Destination matrix:', {
+                    rows: dst.rows,
+                    cols: dst.cols,
+                    type: dst.type(),
+                    channels: dst.channels(),
+                    empty: dst.empty(),
+                    size: dst.size()
+                });
 
-                // Clean up
-                src.delete();
-                dst.delete();
-                gray.delete();
-                blurred.delete();
+                // Create new image data
+                if (dst.empty()) {
+                    throw new Error('Destination matrix is empty');
+                }
+
+                // Ensure we have the correct amount of data
+                const correctSize = canvas.width * canvas.height * 4;
+                if (dst.data.length !== correctSize) {
+                    console.error('[VIEWER] Data size mismatch:', {
+                        expected: correctSize,
+                        actual: dst.data.length
+                    });
+                    throw new Error('Data size mismatch');
+                }
+
+                // Create new ImageData using the correct dimensions
+                const outputData = new Uint8ClampedArray(dst.data);
+                const outputImage = new ImageData(outputData, canvas.width, canvas.height);
+
+                // Clear canvas and draw new image
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.putImageData(outputImage, 0, 0);
+
+                console.debug('[VIEWER] Frame processed successfully');
 
             } catch (cvError) {
-                console.error('[VIEWER] OpenCV processing error:', cvError);
+                console.error('[VIEWER] OpenCV processing error:', {
+                    error: cvError,
+                    message: cvError.message,
+                    stack: cvError.stack,
+                    type: typeof cvError
+                });
                 // On error, show original frame
                 ctx.drawImage(video, 0, 0);
+            } finally {
+                // Clean up
+                if (src && !src.isDeleted()) {
+                    src.delete();
+                }
+                if (dst && !dst.isDeleted()) {
+                    dst.delete();
+                }
+                if (gray && !gray.isDeleted()) {
+                    gray.delete();
+                }
             }
         }
 
@@ -1167,6 +1264,107 @@ function processVideoFrame(video, canvas) {
         requestAnimationFrame(() => processVideoFrame(video, canvas));
     }
 }
+
+// Add a helper function to verify matrix dimensions
+function verifyMatrixDimensions(mat, width, height) {
+    return mat.cols === width &&
+           mat.rows === height &&
+           !mat.empty() &&
+           mat.channels() === 4;  // We expect RGBA
+}
+
+// Add a helper function to check if OpenCV is fully initialized
+function isOpenCVReady() {
+    return new Promise((resolve) => {
+        if (cvReady && typeof cv !== 'undefined') {
+            resolve(true);
+            return;
+        }
+
+        // Wait for OpenCV to be ready
+        const checkInterval = setInterval(() => {
+            if (cvReady && typeof cv !== 'undefined') {
+                clearInterval(checkInterval);
+                resolve(true);
+            }
+        }, 100);
+
+        // Timeout after 10 seconds
+        setTimeout(() => {
+            clearInterval(checkInterval);
+            resolve(false);
+        }, 10000);
+    });
+}
+
+
+async function setVideoMode(mode) {
+    console.log('[VIEWER] Attempting to switch video mode to:', mode);
+
+    if (mode === 'edge') {
+        const ready = await isOpenCVReady();
+        if (!ready) {
+            console.error('[VIEWER] OpenCV is not ready');
+            alert('OpenCV is not ready yet. Please try again in a moment.');
+            return;
+        }
+    }
+
+    videoProcessing.mode = mode;
+    console.log('[VIEWER] Mode switched to:', mode);
+
+    // Update button states
+    document.querySelectorAll('.video-controls .btn').forEach(btn => {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-secondary');
+    });
+    document.getElementById(`${mode}Mode`)?.classList.remove('btn-secondary');
+    document.getElementById(`${mode}Mode`)?.classList.add('btn-primary');
+}
+
+function verifyOpenCV() {
+    if (!cvReady || typeof cv === 'undefined') {
+        console.error('[VIEWER] OpenCV is not loaded');
+        return false;
+    }
+
+    try {
+        // Create a small test image
+        const width = 2, height = 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        // Draw something
+        ctx.fillStyle = 'red';
+        ctx.fillRect(0, 0, 1, 1);
+        ctx.fillStyle = 'green';
+        ctx.fillRect(1, 0, 1, 1);
+
+        // Get image data
+        const imageData = ctx.getImageData(0, 0, width, height);
+
+        // Test OpenCV operations
+        const src = cv.matFromImageData(imageData);
+        const dst = new cv.Mat();
+
+        // Test color conversion
+        cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY);
+        cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
+
+        // Clean up
+        src.delete();
+        dst.delete();
+
+        console.log('[VIEWER] OpenCV verification successful');
+        return true;
+    } catch (error) {
+        console.error('[VIEWER] OpenCV verification failed:', error);
+        return false;
+    }
+}
+
 
 function stopViewer() {
     try {
