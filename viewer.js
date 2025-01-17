@@ -9,8 +9,11 @@ let videoProcessing = {
     active: false,
     lastFrameTime: 0,
     fpsInterval: 1000/30,
-    mode: 'edge' // default mode
+    mode: 'original',
+    lowThreshold: 30,
+    highThreshold: 100
 };
+
 //globals for DQP metrics and test
 const profilingTestLength = 20;
 const DQPtestLength = 10; //test time in seconds
@@ -1096,18 +1099,12 @@ function verifyOpenCV() {
     }
 }
 
-async function setupVideoAnalysis(videoElement) {
+function setupVideoAnalysis(videoElement) {
     console.log('[VIEWER] Setting up video analysis');
     const canvas = document.getElementById('canvasOutput');
     if (!canvas) {
         console.error('[VIEWER] Canvas element not found');
         return;
-    }
-
-    // Wait for OpenCV to be ready
-    const ready = await isOpenCVReady();
-    if (!ready) {
-        console.warn('[VIEWER] OpenCV not ready, edge detection will be disabled initially');
     }
 
     // Set initial canvas size
@@ -1116,10 +1113,10 @@ async function setupVideoAnalysis(videoElement) {
 
     // Add video controls
     addVideoControls();
+    addEdgeControls();
 
     // Start processing
     videoProcessing.active = true;
-    videoProcessing.mode = 'original';
     requestAnimationFrame(() => processVideoFrame(videoElement, canvas));
 }
 
@@ -1154,109 +1151,54 @@ function processVideoFrame(video, canvas) {
             let gray = null;
 
             try {
-                console.debug('[VIEWER] Starting edge detection processing');
-
-                // Get image data
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const dataSize = imageData.width * imageData.height * 4; // RGBA = 4 channels
-
-                console.debug('[VIEWER] Image data:', {
-                    width: imageData.width,
-                    height: imageData.height,
-                    dataSize: dataSize,
-                    actualDataLength: imageData.data.length
-                });
-
-                // Create source matrix
                 src = cv.matFromImageData(imageData);
-                console.debug('[VIEWER] Source matrix:', {
-                    rows: src.rows,
-                    cols: src.cols,
-                    type: src.type(),
-                    channels: src.channels(),
-                    empty: src.empty(),
-                    size: src.size()
-                });
-
-                // Create destination matrices
                 dst = new cv.Mat();
                 gray = new cv.Mat();
 
                 // Convert to grayscale
                 cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-                console.debug('[VIEWER] Converted to grayscale');
 
-                // Apply Gaussian blur
-                cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-                console.debug('[VIEWER] Applied Gaussian blur');
+                // Apply Gaussian blur with smaller kernel
+                cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0);
 
-                // Apply Canny edge detection
-                cv.Canny(gray, dst, 50, 150, 3);
-                console.debug('[VIEWER] Applied Canny edge detection');
+                // Apply Canny edge detection with adjusted thresholds
+                cv.Canny(gray, dst, 30, 100); // Lower thresholds to detect more edges
 
-                // Convert single channel to RGBA for display
-                cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
-                console.debug('[VIEWER] Converted back to RGBA');
+                // Create a white background
+                let displayMat = new cv.Mat(dst.rows, dst.cols, cv.CV_8UC4, new cv.Scalar(255, 255, 255, 255));
 
-                // Verify destination matrix
-                console.debug('[VIEWER] Destination matrix:', {
-                    rows: dst.rows,
-                    cols: dst.cols,
-                    type: dst.type(),
-                    channels: dst.channels(),
-                    empty: dst.empty(),
-                    size: dst.size()
-                });
-
-                // Create new image data
-                if (dst.empty()) {
-                    throw new Error('Destination matrix is empty');
+                // Convert edges to white on black background
+                for (let i = 0; i < dst.rows; i++) {
+                    for (let j = 0; j < dst.cols; j++) {
+                        if (dst.ucharPtr(i, j)[0] > 0) {
+                            // If edge detected, make it black
+                            displayMat.ucharPtr(i, j)[0] = 0;   // B
+                            displayMat.ucharPtr(i, j)[1] = 0;   // G
+                            displayMat.ucharPtr(i, j)[2] = 0;   // R
+                            displayMat.ucharPtr(i, j)[3] = 255; // A
+                        }
+                    }
                 }
 
-                // Ensure we have the correct amount of data
-                const correctSize = canvas.width * canvas.height * 4;
-                if (dst.data.length !== correctSize) {
-                    console.error('[VIEWER] Data size mismatch:', {
-                        expected: correctSize,
-                        actual: dst.data.length
-                    });
-                    throw new Error('Data size mismatch');
-                }
+                // Display the result
+                cv.imshow(canvas, displayMat);
 
-                // Create new ImageData using the correct dimensions
-                const outputData = new Uint8ClampedArray(dst.data);
-                const outputImage = new ImageData(outputData, canvas.width, canvas.height);
-
-                // Clear canvas and draw new image
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.putImageData(outputImage, 0, 0);
+                // Clean up
+                displayMat.delete();
 
                 console.debug('[VIEWER] Frame processed successfully');
 
             } catch (cvError) {
-                console.error('[VIEWER] OpenCV processing error:', {
-                    error: cvError,
-                    message: cvError.message,
-                    stack: cvError.stack,
-                    type: typeof cvError
-                });
-                // On error, show original frame
+                console.error('[VIEWER] OpenCV processing error:', cvError);
                 ctx.drawImage(video, 0, 0);
             } finally {
-                // Clean up
-                if (src && !src.isDeleted()) {
-                    src.delete();
-                }
-                if (dst && !dst.isDeleted()) {
-                    dst.delete();
-                }
-                if (gray && !gray.isDeleted()) {
-                    gray.delete();
-                }
+                if (src && !src.isDeleted()) src.delete();
+                if (dst && !dst.isDeleted()) dst.delete();
+                if (gray && !gray.isDeleted()) gray.delete();
             }
         }
 
-        // Schedule next frame
         requestAnimationFrame(() => processVideoFrame(video, canvas));
 
     } catch (err) {
@@ -1264,6 +1206,7 @@ function processVideoFrame(video, canvas) {
         requestAnimationFrame(() => processVideoFrame(video, canvas));
     }
 }
+
 
 // Add a helper function to verify matrix dimensions
 function verifyMatrixDimensions(mat, width, height) {
@@ -1297,6 +1240,50 @@ function isOpenCVReady() {
     });
 }
 
+
+// Add controls for edge detection parameters
+function addEdgeControls() {
+    const controlsDiv = document.createElement('div');
+    controlsDiv.className = 'edge-controls';
+    controlsDiv.style.cssText = `
+        position: absolute;
+        top: 50px;
+        left: 10px;
+        z-index: 1000;
+        background: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+        color: white;
+    `;
+
+    controlsDiv.innerHTML = `
+        <div class="mb-2">
+            <label>Low Threshold: <span id="lowThreshold">30</span></label>
+            <input type="range" class="form-range" min="0" max="100" value="30"
+                   id="lowThresholdRange">
+        </div>
+        <div class="mb-2">
+            <label>High Threshold: <span id="highThreshold">100</span></label>
+            <input type="range" class="form-range" min="0" max="200" value="100"
+                   id="highThresholdRange">
+        </div>
+    `;
+
+    // Add controls to the canvas container
+    const canvasContainer = document.getElementById('canvasOutput').parentElement;
+    canvasContainer.appendChild(controlsDiv);
+
+    // Add event listeners
+    document.getElementById('lowThresholdRange').addEventListener('input', (e) => {
+        document.getElementById('lowThreshold').textContent = e.target.value;
+        videoProcessing.lowThreshold = parseInt(e.target.value);
+    });
+
+    document.getElementById('highThresholdRange').addEventListener('input', (e) => {
+        document.getElementById('highThreshold').textContent = e.target.value;
+        videoProcessing.highThreshold = parseInt(e.target.value);
+    });
+}
 
 async function setVideoMode(mode) {
     console.log('[VIEWER] Attempting to switch video mode to:', mode);
