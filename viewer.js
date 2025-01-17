@@ -1336,6 +1336,8 @@ function calculateHeartRate() {
         // Use green channel as it's most sensitive to blood volume changes
         const signal = videoProcessing.heartbeat.greenTimeSeries;
 
+        console.log('[VIEWER] Processing heart rate with signal length:', signal.length);
+
         // Detrend: remove linear trend from signal
         let detrended = [];
         const length = signal.length;
@@ -1343,13 +1345,32 @@ function calculateHeartRate() {
             detrended[i] = signal[i] - (signal[0] + (signal[length-1] - signal[0]) * i / (length-1));
         }
 
-        // Simple peak detection
+        // Simple peak detection with moving average smoothing
+        const windowSize = 5;
+        let smoothed = [];
+        for (let i = 0; i < detrended.length; i++) {
+            let sum = 0;
+            let count = 0;
+            for (let j = Math.max(0, i - windowSize); j < Math.min(detrended.length, i + windowSize); j++) {
+                sum += detrended[j];
+                count++;
+            }
+            smoothed[i] = sum / count;
+        }
+
+        // Find peaks with minimum distance
         let peaks = [];
-        for (let i = 1; i < detrended.length - 1; i++) {
-            if (detrended[i] > detrended[i-1] && detrended[i] > detrended[i+1]) {
+        const minDistance = 10; // Minimum samples between peaks
+        let lastPeakIndex = -minDistance;
+
+        for (let i = 1; i < smoothed.length - 1; i++) {
+            if (smoothed[i] > smoothed[i-1] && smoothed[i] > smoothed[i+1] && (i - lastPeakIndex) >= minDistance) {
                 peaks.push(i);
+                lastPeakIndex = i;
             }
         }
+
+        console.log('[VIEWER] Found peaks:', peaks.length);
 
         // Calculate heart rate from peak intervals
         if (peaks.length >= 2) {
@@ -1372,7 +1393,6 @@ function calculateHeartRate() {
         console.error('[VIEWER] Error calculating heart rate:', error);
     }
 }
-
 
 // Add a helper function to verify matrix dimensions
 function verifyMatrixDimensions(mat, width, height) {
