@@ -11,7 +11,8 @@ let videoProcessing = {
     fpsInterval: 1000/30,
     mode: 'original',
     lowThreshold: 30,
-    highThreshold: 100
+    highThreshold: 100,
+    faceCascade: null
 };
 
 //globals for DQP metrics and test
@@ -304,12 +305,15 @@ function startAnalysis(video, canvas) {
 
 
 async function startViewer(localView, remoteView, formValues, onStatsReport, remoteMessage) {
+    formValues.enableVideoAnalysis = document.getElementById('enableVideoAnalysis')?.checked ?? false;
+    console.log('[VIEWER] Video analysis enabled:', formValues.enableVideoAnalysis);
+
     try {
         console.log('[VIEWER] startViewer');
         videoProcessing.active = false; // Reset video processing state
 
-         // Add OpenCV initialization check
-         if (typeof cv === 'undefined') {
+        // Add OpenCV initialization check
+        if (formValues.enableVideoAnalysis && typeof cv === 'undefined') {
             console.error('[VIEWER] OpenCV.js is not loaded');
             return;
         }
@@ -337,7 +341,7 @@ async function startViewer(localView, remoteView, formValues, onStatsReport, rem
                     metrics.master.iceGathering.endTime = metrics.viewer.ttff.endTime;
                 }
             }
-            if(formValues.enableDQPmetrics) {
+            if (formValues.enableDQPmetrics) {
                 timeToFirstFrameFromOffer = metrics.viewer.ttff.endTime - metrics.viewer.offAnswerTime.startTime;
                 timeToFirstFrameFromViewerStart = metrics.viewer.ttff.endTime - viewerButtonPressed.getTime();
             }
@@ -533,7 +537,7 @@ async function startViewer(localView, remoteView, formValues, onStatsReport, rem
                 sessionToken: formValues.sessionToken,
             },
             requestSigner: {
-                getSignedURL: async function(signalingEndpoint, queryParams, date) {
+                getSignedURL: async function (signalingEndpoint, queryParams, date) {
                     const signer = new KVSWebRTC.SigV4RequestSigner(formValues.region, {
                         accessKeyId: formValues.accessKeyId,
                         secretAccessKey: formValues.secretAccessKey,
@@ -557,9 +561,9 @@ async function startViewer(localView, remoteView, formValues, onStatsReport, rem
 
         const resolution = formValues.widescreen
             ? {
-                  width: { ideal: 1280 },
-                  height: { ideal: 720 },
-              }
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+            }
             : { width: { ideal: 640 }, height: { ideal: 480 } };
         const constraints = {
             video: formValues.sendVideo ? resolution : false,
@@ -1006,12 +1010,8 @@ function renderFrame(video, canvas) {
         requestAnimationFrame(() => renderFrame(video, canvas));
     }
 }
-function addVideoControls() {
-    // Check if controls already exist
-    if (document.querySelector('.video-controls')) {
-        return;
-    }
 
+function addVideoControls() {
     const controlsDiv = document.createElement('div');
     controlsDiv.className = 'video-controls';
     controlsDiv.style.cssText = `
@@ -1028,10 +1028,10 @@ function addVideoControls() {
         <div class="btn-group" role="group">
             <button id="originalMode" class="btn btn-sm ${videoProcessing.mode === 'original' ? 'btn-primary' : 'btn-secondary'}">Original</button>
             <button id="edgeMode" class="btn btn-sm ${videoProcessing.mode === 'edge' ? 'btn-primary' : 'btn-secondary'}">Edge Detection</button>
+            <button id="faceMode" class="btn btn-sm ${videoProcessing.mode === 'face' ? 'btn-primary' : 'btn-secondary'}">Face Detection</button>
         </div>
     `;
 
-    // Add controls to the canvas container
     const canvasContainer = document.getElementById('canvasOutput').parentElement;
     canvasContainer.style.position = 'relative';
     canvasContainer.appendChild(controlsDiv);
@@ -1039,37 +1039,7 @@ function addVideoControls() {
     // Add event listeners
     document.getElementById('originalMode').addEventListener('click', () => setVideoMode('original'));
     document.getElementById('edgeMode').addEventListener('click', () => setVideoMode('edge'));
-}
-
-async function setVideoMode(mode) {
-    console.log('[VIEWER] Attempting to switch video mode to:', mode);
-
-    if (mode === 'edge') {
-        const ready = await isOpenCVReady();
-        if (!ready) {
-            console.error('[VIEWER] OpenCV is not ready');
-            alert('OpenCV is not ready yet. Please try again in a moment.');
-            return;
-        }
-
-        // Verify OpenCV functionality
-        if (!verifyOpenCV()) {
-            console.error('[VIEWER] OpenCV verification failed');
-            alert('OpenCV functionality test failed. Edge detection may not work correctly.');
-            return;
-        }
-    }
-
-    videoProcessing.mode = mode;
-    console.log('[VIEWER] Mode switched to:', mode);
-
-    // Update button states
-    document.querySelectorAll('.video-controls .btn').forEach(btn => {
-        btn.classList.remove('btn-primary');
-        btn.classList.add('btn-secondary');
-    });
-    document.getElementById(`${mode}Mode`)?.classList.remove('btn-secondary');
-    document.getElementById(`${mode}Mode`)?.classList.add('btn-primary');
+    document.getElementById('faceMode').addEventListener('click', () => setVideoMode('face'));
 }
 
 function startVideoProcessing(video, canvas) {
@@ -1096,7 +1066,7 @@ function verifyOpenCV() {
     }
 }
 
-function setupVideoAnalysis(videoElement) {
+async function setupVideoAnalysis(videoElement) {
     console.log('[VIEWER] Setting up video analysis');
     const canvas = document.getElementById('canvasOutput');
     if (!canvas) {
@@ -1108,18 +1078,20 @@ function setupVideoAnalysis(videoElement) {
     canvas.width = videoElement.videoWidth || 640;
     canvas.height = videoElement.videoHeight || 480;
 
-    // Add video controls
+    // Add controls
     addVideoControls();
     addEdgeControls();
+
+    // Pre-load face detection cascade
+    // await initFaceDetection();
 
     // Start processing
     videoProcessing.active = true;
     requestAnimationFrame(() => processVideoFrame(videoElement, canvas));
 }
 
-
 document.addEventListener('keydown', (event) => {
-    switch(event.key.toLowerCase()) {
+    switch (event.key.toLowerCase()) {
         case 'o':
             setVideoMode('original');
             break;
@@ -1128,6 +1100,8 @@ document.addEventListener('keydown', (event) => {
             break;
     }
 });
+
+
 function processVideoFrame(video, canvas) {
     if (!videoProcessing.active) {
         return;
@@ -1142,8 +1116,63 @@ function processVideoFrame(video, canvas) {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
 
-        if (cvReady && videoProcessing.mode === 'edge') {
+        if (cvReady && videoProcessing.mode === 'face') {
             let src = null;
+            let gray = null;
+            try {
+                // Get image data
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                src = cv.matFromImageData(imageData);
+                gray = new cv.Mat();
+
+                // Convert to grayscale
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+                // Detect faces
+                let faces = new cv.RectVector();
+                let scaleFactor = 1.1;
+                let minNeighbors = 3;
+                let minSize = new cv.Size(30, 30);
+
+                // Detect faces
+                videoProcessing.faceCascade.detectMultiScale(
+                    gray,
+                    faces,
+                    scaleFactor,
+                    minNeighbors,
+                    0,
+                    minSize
+                );
+
+                // Draw rectangles around detected faces
+                for (let i = 0; i < faces.size(); ++i) {
+                    let face = faces.get(i);
+                    let point1 = new cv.Point(face.x, face.y);
+                    let point2 = new cv.Point(face.x + face.width, face.y + face.height);
+                    cv.rectangle(src, point1, point2, [0, 255, 0, 255], 2);
+                }
+
+                // Show result
+                cv.imshow(canvas, src);
+
+                // Clean up
+                faces.delete();
+
+            } catch (cvError) {
+                console.error('[VIEWER] Face detection error:', {
+                    error: cvError,
+                    message: cvError.message,
+                    stack: cvError.stack
+                });
+                // On error, show original frame
+                ctx.drawImage(video, 0, 0);
+            } finally {
+                if (src && !src.isDeleted()) src.delete();
+                if (gray && !gray.isDeleted()) gray.delete();
+            }
+        }
+        else if (cvReady && videoProcessing.mode === 'edge') {
+    let src = null;
             let dst = null;
             let gray = null;
 
@@ -1204,13 +1233,12 @@ function processVideoFrame(video, canvas) {
     }
 }
 
-
 // Add a helper function to verify matrix dimensions
 function verifyMatrixDimensions(mat, width, height) {
     return mat.cols === width &&
-           mat.rows === height &&
-           !mat.empty() &&
-           mat.channels() === 4;  // We expect RGBA
+        mat.rows === height &&
+        !mat.empty() &&
+        mat.channels() === 4;  // We expect RGBA
 }
 
 // Add a helper function to check if OpenCV is fully initialized
@@ -1285,12 +1313,44 @@ function addEdgeControls() {
 async function setVideoMode(mode) {
     console.log('[VIEWER] Attempting to switch video mode to:', mode);
 
-    if (mode === 'edge') {
-        const ready = await isOpenCVReady();
-        if (!ready) {
-            console.error('[VIEWER] OpenCV is not ready');
-            alert('OpenCV is not ready yet. Please try again in a moment.');
-            return;
+    if ((mode === 'edge' || mode === 'face') && !cvReady) {
+        console.error('[VIEWER] OpenCV is not ready');
+        alert('OpenCV is not ready yet. Please try again in a moment.');
+        return;
+    }
+
+    if (mode === 'face') {
+        if (!videoProcessing.faceCascade) {
+            console.log('[VIEWER] Loading face detection cascade...');
+            try {
+                // Fetch the cascade file
+                const response = await fetch('./cascades/haarcascade_frontalface_default.xml');
+                if (!response.ok) {
+                    throw new Error('Failed to load cascade file');
+                }
+                const cascadeData = await response.text();
+
+                // Create a virtual file in OpenCV's file system
+                const cascadeFilename = 'haarcascade_frontalface_default.xml';
+                cv.FS_createDataFile('/', cascadeFilename, cascadeData, true, false, false);
+
+                // Load the cascade classifier from the virtual file
+                videoProcessing.faceCascade = new cv.CascadeClassifier();
+                videoProcessing.faceCascade.load(cascadeFilename);
+
+                // Clean up the virtual file
+                cv.FS_unlink('/' + cascadeFilename);
+
+                if (videoProcessing.faceCascade.empty()) {
+                    console.error('[VIEWER] Failed to load cascade classifier');
+                    return;
+                }
+
+            } catch (error) {
+                console.error('[VIEWER] Error loading cascade:', error);
+                alert('Failed to load face detection. Please try again.');
+                return;
+            }
         }
     }
 
@@ -1305,7 +1365,6 @@ async function setVideoMode(mode) {
     document.getElementById(`${mode}Mode`)?.classList.remove('btn-secondary');
     document.getElementById(`${mode}Mode`)?.classList.add('btn-primary');
 }
-
 function verifyOpenCV() {
     if (!cvReady || typeof cv === 'undefined') {
         console.error('[VIEWER] OpenCV is not loaded');
@@ -1332,6 +1391,8 @@ function verifyOpenCV() {
         // Test OpenCV operations
         const src = cv.matFromImageData(imageData);
         const dst = new cv.Mat();
+        const face = new cv.CascadeClassifier();
+
 
         // Test color conversion
         cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY);
@@ -1340,6 +1401,7 @@ function verifyOpenCV() {
         // Clean up
         src.delete();
         dst.delete();
+        face.delete();
 
         console.log('[VIEWER] OpenCV verification successful');
         return true;
@@ -1422,7 +1484,7 @@ function stopViewer() {
         videoProcessing = {
             active: false,
             lastFrameTime: 0,
-            fpsInterval: 1000/30,
+            fpsInterval: 1000 / 30,
             processingCanvas: null,
             outputCanvas: null,
             classifier: null,
@@ -1462,7 +1524,7 @@ function sendViewerMessage(message) {
 function profilingCalculations() {
     let headerElement = document.getElementById("timeline-profiling-header");
     headerElement.textContent = "Profiling Timeline chart";
-    google.charts.load('current', {packages:['timeline']});
+    google.charts.load('current', { packages: ['timeline'] });
     google.charts.setOnLoadCallback(drawChart);
     clearInterval(viewer.profilingInterval);
 }
@@ -1724,9 +1786,9 @@ function getCalculatedEpoch(time, diffInMillis, minTime) {
 
 function drawChart() {
     const viewerOrder = ['signaling', 'describeChannel', 'describeMediaStorageConfiguration', 'channelEndpoint', 'iceServerConfig', 'signConnectAsViewer', 'connectAsViewer', 'setupMediaPlayer', 'waitTime',
-                    'offAnswerTime', 'iceGathering', 'peerConnection', 'dataChannel', 'ttffAfterPc', 'ttff'];
+        'offAnswerTime', 'iceGathering', 'peerConnection', 'dataChannel', 'ttffAfterPc', 'ttff'];
     const masterOrder = ['signaling', 'describeChannel', 'channelEndpoint', 'iceServerConfig', 'getToken', 'createChannel', 'connectAsMaster', 'waitTime',
-                    'offAnswerTime', 'iceGathering', 'peerConnection', 'dataChannel', 'ttffAfterPc'];
+        'offAnswerTime', 'iceGathering', 'peerConnection', 'dataChannel', 'ttffAfterPc'];
     const container = document.getElementById('timeline-chart');
     const rowHeight = 45;
     const chart = new google.visualization.Timeline(container);
@@ -1749,7 +1811,7 @@ function drawChart() {
             let duration = endTime - startTime;
 
             if (duration > 0) {
-                dataTable.addRow([ metrics.master[key].name, null, getTooltipContent(metrics.master[key].tooltip, duration), startTime, endTime ]);
+                dataTable.addRow([metrics.master[key].name, null, getTooltipContent(metrics.master[key].tooltip, duration), startTime, endTime]);
                 colors.push(metrics.master[key].color);
                 containerHeight += rowHeight;
             }
@@ -1763,7 +1825,7 @@ function drawChart() {
             let duration = endTime - startTime;
 
             if (duration > 0) {
-                dataTable.addRow([ metrics.viewer[key].name, null, getTooltipContent(metrics.viewer[key].tooltip, duration), startTime, endTime ]);
+                dataTable.addRow([metrics.viewer[key].name, null, getTooltipContent(metrics.viewer[key].tooltip, duration), startTime, endTime]);
                 colors.push(metrics.viewer[key].color);
                 containerHeight += rowHeight;
             }
