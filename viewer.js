@@ -14,14 +14,17 @@ let videoProcessing = {
     highThreshold: 100,
     faceCascade: null,
     heartbeat: {
-        active: false,
-        faceRegions: [],
-        timeSeriesLength: 150, // number of frames to analyze
+        active: true,
+        timeSeriesLength: 150,
         redTimeSeries: [],
         greenTimeSeries: [],
         blueTimeSeries: [],
         lastHeartbeat: 0,
-        fps: 30
+        fps: 30,
+        frameCounter: 0,
+        processEveryNFrames: 5, // Only process every 5th frame
+        lastProcessedTime: 0,
+        minimumProcessInterval: 33 // Minimum 33ms between processing (approx 30fps)
     }
 };
 
@@ -1129,8 +1132,8 @@ function processVideoFrame(video, canvas) {
             let src = null;
             let gray = null;
             try {
-                // Get image data
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                // Get image data - use full canvas size
+                const imageData = ctx.getImageData(0, 0, video.videoWidth, video.videoHeight);
                 src = cv.matFromImageData(imageData);
                 gray = new cv.Mat();
 
@@ -1143,6 +1146,12 @@ function processVideoFrame(video, canvas) {
                 let minNeighbors = 3;
                 let minSize = new cv.Size(30, 30);
 
+                // Debug log for face detection
+                console.log('[VIEWER] Attempting face detection on frame:', {
+                    width: gray.cols,
+                    height: gray.rows
+                });
+
                 // Detect faces
                 videoProcessing.faceCascade.detectMultiScale(
                     gray,
@@ -1152,6 +1161,8 @@ function processVideoFrame(video, canvas) {
                     0,
                     minSize
                 );
+
+                console.log('[VIEWER] Detected faces:', faces.size());
 
                 // Draw rectangles around detected faces and process heart rate
                 for (let i = 0; i < faces.size(); ++i) {
@@ -1163,7 +1174,7 @@ function processVideoFrame(video, canvas) {
                     cv.rectangle(src, point1, point2, [0, 255, 0, 255], 2);
 
                     // Heart rate processing
-                    if (videoProcessing.heartbeat.active) {
+                    if (videoProcessing.heartbeat && videoProcessing.heartbeat.active) {
                         // Define forehead ROI (top 25% of face)
                         const foreheadHeight = Math.round(face.height * 0.25);
                         const foreheadY = face.y + Math.round(face.height * 0.1);
@@ -1187,6 +1198,8 @@ function processVideoFrame(video, canvas) {
                         let roiMat = src.roi(foreheadROI);
                         let means = cv.mean(roiMat);
 
+                        console.log('[VIEWER] ROI means:', means);
+
                         // Add to time series
                         videoProcessing.heartbeat.redTimeSeries.push(means[0]);
                         videoProcessing.heartbeat.greenTimeSeries.push(means[1]);
@@ -1199,21 +1212,40 @@ function processVideoFrame(video, canvas) {
                             videoProcessing.heartbeat.blueTimeSeries.shift();
                         }
 
+                        console.log('[VIEWER] Time series length:', videoProcessing.heartbeat.greenTimeSeries.length);
+
                         // Calculate heart rate when we have enough samples
                         if (videoProcessing.heartbeat.redTimeSeries.length === videoProcessing.heartbeat.timeSeriesLength) {
+                            console.log('[VIEWER] Calculating heart rate...');
                             calculateHeartRate();
                         }
 
                         // Display heart rate
                         if (videoProcessing.heartbeat.lastHeartbeat > 0) {
                             const text = `Heart Rate: ${Math.round(videoProcessing.heartbeat.lastHeartbeat)} BPM`;
+                            console.log('[VIEWER] Displaying heart rate:', text);
+
+                            // Draw text with background for better visibility
+                            const textSize = 0.8;
+                            const textBaseline = 30;
+
+                            // Draw background rectangle
+                            cv.rectangle(
+                                src,
+                                new cv.Point(5, textBaseline - 25),
+                                new cv.Point(200, textBaseline + 5),
+                                [0, 0, 0, 128],
+                                cv.FILLED
+                            );
+
+                            // Draw text
                             cv.putText(
                                 src,
                                 text,
-                                new cv.Point(face.x, face.y - 10),
+                                new cv.Point(10, textBaseline),
                                 cv.FONT_HERSHEY_SIMPLEX,
-                                0.6,
-                                [0, 255, 0, 255],
+                                textSize,
+                                [255, 255, 255, 255],
                                 2
                             );
                         }
@@ -1222,18 +1254,14 @@ function processVideoFrame(video, canvas) {
                     }
                 }
 
-                // Show result
+                // Display the processed image without scaling
                 cv.imshow(canvas, src);
 
                 // Clean up
                 faces.delete();
 
             } catch (cvError) {
-                console.error('[VIEWER] Face detection error:', {
-                    error: cvError,
-                    message: cvError.message,
-                    stack: cvError.stack
-                });
+                console.error('[VIEWER] Face detection error:', cvError);
                 // On error, show original frame
                 ctx.drawImage(video, 0, 0);
             } finally {
@@ -1337,12 +1365,14 @@ function calculateHeartRate() {
             // Update if reasonable (between 45-200 BPM)
             if (heartRate >= 45 && heartRate <= 200) {
                 videoProcessing.heartbeat.lastHeartbeat = heartRate;
+                console.log('[VIEWER] Calculated heart rate:', Math.round(heartRate), 'BPM');
             }
         }
     } catch (error) {
         console.error('[VIEWER] Error calculating heart rate:', error);
     }
 }
+
 
 // Add a helper function to verify matrix dimensions
 function verifyMatrixDimensions(mat, width, height) {
