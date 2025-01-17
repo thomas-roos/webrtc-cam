@@ -12,7 +12,17 @@ let videoProcessing = {
     mode: 'original',
     lowThreshold: 30,
     highThreshold: 100,
-    faceCascade: null
+    faceCascade: null,
+    heartbeat: {
+        active: false,
+        faceRegions: [],
+        timeSeriesLength: 150, // number of frames to analyze
+        redTimeSeries: [],
+        greenTimeSeries: [],
+        blueTimeSeries: [],
+        lastHeartbeat: 0,
+        fps: 30
+    }
 };
 
 //globals for DQP metrics and test
@@ -1115,7 +1125,6 @@ function processVideoFrame(video, canvas) {
 
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
-
         if (cvReady && videoProcessing.mode === 'face') {
             let src = null;
             let gray = null;
@@ -1144,12 +1153,73 @@ function processVideoFrame(video, canvas) {
                     minSize
                 );
 
-                // Draw rectangles around detected faces
+                // Draw rectangles around detected faces and process heart rate
                 for (let i = 0; i < faces.size(); ++i) {
                     let face = faces.get(i);
+
+                    // Draw face rectangle
                     let point1 = new cv.Point(face.x, face.y);
                     let point2 = new cv.Point(face.x + face.width, face.y + face.height);
                     cv.rectangle(src, point1, point2, [0, 255, 0, 255], 2);
+
+                    // Heart rate processing
+                    if (videoProcessing.heartbeat.active) {
+                        // Define forehead ROI (top 25% of face)
+                        const foreheadHeight = Math.round(face.height * 0.25);
+                        const foreheadY = face.y + Math.round(face.height * 0.1);
+                        const foreheadROI = new cv.Rect(
+                            face.x,
+                            foreheadY,
+                            face.width,
+                            foreheadHeight
+                        );
+
+                        // Draw forehead ROI rectangle
+                        cv.rectangle(
+                            src,
+                            new cv.Point(foreheadROI.x, foreheadROI.y),
+                            new cv.Point(foreheadROI.x + foreheadROI.width, foreheadROI.y + foreheadROI.height),
+                            [255, 0, 0, 255],
+                            1
+                        );
+
+                        // Extract ROI and calculate mean RGB
+                        let roiMat = src.roi(foreheadROI);
+                        let means = cv.mean(roiMat);
+
+                        // Add to time series
+                        videoProcessing.heartbeat.redTimeSeries.push(means[0]);
+                        videoProcessing.heartbeat.greenTimeSeries.push(means[1]);
+                        videoProcessing.heartbeat.blueTimeSeries.push(means[2]);
+
+                        // Maintain time series length
+                        if (videoProcessing.heartbeat.redTimeSeries.length > videoProcessing.heartbeat.timeSeriesLength) {
+                            videoProcessing.heartbeat.redTimeSeries.shift();
+                            videoProcessing.heartbeat.greenTimeSeries.shift();
+                            videoProcessing.heartbeat.blueTimeSeries.shift();
+                        }
+
+                        // Calculate heart rate when we have enough samples
+                        if (videoProcessing.heartbeat.redTimeSeries.length === videoProcessing.heartbeat.timeSeriesLength) {
+                            calculateHeartRate();
+                        }
+
+                        // Display heart rate
+                        if (videoProcessing.heartbeat.lastHeartbeat > 0) {
+                            const text = `Heart Rate: ${Math.round(videoProcessing.heartbeat.lastHeartbeat)} BPM`;
+                            cv.putText(
+                                src,
+                                text,
+                                new cv.Point(face.x, face.y - 10),
+                                cv.FONT_HERSHEY_SIMPLEX,
+                                0.6,
+                                [0, 255, 0, 255],
+                                2
+                            );
+                        }
+
+                        roiMat.delete();
+                    }
                 }
 
                 // Show result
@@ -1172,7 +1242,7 @@ function processVideoFrame(video, canvas) {
             }
         }
         else if (cvReady && videoProcessing.mode === 'edge') {
-    let src = null;
+            let src = null;
             let dst = null;
             let gray = null;
 
@@ -1230,6 +1300,47 @@ function processVideoFrame(video, canvas) {
     } catch (err) {
         console.error('[VIEWER] Main processing error:', err);
         requestAnimationFrame(() => processVideoFrame(video, canvas));
+    }
+}
+
+function calculateHeartRate() {
+    try {
+        // Use green channel as it's most sensitive to blood volume changes
+        const signal = videoProcessing.heartbeat.greenTimeSeries;
+
+        // Detrend: remove linear trend from signal
+        let detrended = [];
+        const length = signal.length;
+        for (let i = 0; i < length; i++) {
+            detrended[i] = signal[i] - (signal[0] + (signal[length-1] - signal[0]) * i / (length-1));
+        }
+
+        // Simple peak detection
+        let peaks = [];
+        for (let i = 1; i < detrended.length - 1; i++) {
+            if (detrended[i] > detrended[i-1] && detrended[i] > detrended[i+1]) {
+                peaks.push(i);
+            }
+        }
+
+        // Calculate heart rate from peak intervals
+        if (peaks.length >= 2) {
+            const intervals = [];
+            for (let i = 1; i < peaks.length; i++) {
+                intervals.push(peaks[i] - peaks[i-1]);
+            }
+
+            // Convert to BPM
+            const averageInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+            const heartRate = (60 * videoProcessing.heartbeat.fps) / averageInterval;
+
+            // Update if reasonable (between 45-200 BPM)
+            if (heartRate >= 45 && heartRate <= 200) {
+                videoProcessing.heartbeat.lastHeartbeat = heartRate;
+            }
+        }
+    } catch (error) {
+        console.error('[VIEWER] Error calculating heart rate:', error);
     }
 }
 
