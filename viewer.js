@@ -1,6 +1,3 @@
-// @ts-nocheck
-// @nocache
-
 /**
  * This file demonstrates the process of starting WebRTC streaming using a KVS Signaling Channel.
  */
@@ -300,27 +297,6 @@ function startAnalysis(video, canvas) {
     console.log('[VIEWER] Starting analysis');
     videoProcessing.active = true;
     requestAnimationFrame(() => processVideoFrame(video, canvas));
-}
-
-function processVideoFrame(video, canvas) {
-    if (!videoProcessing.active) return;
-
-    try {
-        console.log('[VIEWER] Processing frame:', {
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-            readyState: video.readyState,
-            time: video.currentTime
-        });
-
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        requestAnimationFrame(() => processVideoFrame(video, canvas));
-    } catch (err) {
-        console.error('[VIEWER] Error processing frame:', err);
-        requestAnimationFrame(() => processVideoFrame(video, canvas));
-    }
 }
 
 
@@ -1030,9 +1006,54 @@ function renderFrame(video, canvas) {
         requestAnimationFrame(() => renderFrame(video, canvas));
     }
 }
+function addVideoControls() {
+    // Check if controls already exist
+    if (document.querySelector('.video-controls')) {
+        return;
+    }
 
+    const controlsDiv = document.createElement('div');
+    controlsDiv.className = 'video-controls';
+    controlsDiv.style.cssText = `
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 1000;
+        background: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+    `;
 
-// Add these new functions
+    controlsDiv.innerHTML = `
+        <div class="btn-group" role="group">
+            <button id="originalMode" class="btn btn-sm ${videoProcessing.mode === 'original' ? 'btn-primary' : 'btn-secondary'}">Original</button>
+            <button id="edgeMode" class="btn btn-sm ${videoProcessing.mode === 'edge' ? 'btn-primary' : 'btn-secondary'}">Edge Detection</button>
+        </div>
+    `;
+
+    // Add controls to the canvas container
+    const canvasContainer = document.getElementById('canvasOutput').parentElement;
+    canvasContainer.style.position = 'relative';
+    canvasContainer.appendChild(controlsDiv);
+
+    // Add event listeners
+    document.getElementById('originalMode').addEventListener('click', () => setVideoMode('original'));
+    document.getElementById('edgeMode').addEventListener('click', () => setVideoMode('edge'));
+}
+
+function setVideoMode(mode) {
+    console.log('[VIEWER] Switching video mode to:', mode);
+    videoProcessing.mode = mode;
+
+    // Update button states
+    document.querySelectorAll('.video-controls .btn').forEach(btn => {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-secondary');
+    });
+    document.getElementById(`${mode}Mode`)?.classList.remove('btn-secondary');
+    document.getElementById(`${mode}Mode`)?.classList.add('btn-primary');
+}
+
 function startVideoProcessing(video, canvas) {
     console.log('[VIEWER] Starting video processing');
     videoProcessing.active = true;
@@ -1052,10 +1073,26 @@ function setupVideoAnalysis(videoElement) {
     canvas.width = videoElement.videoWidth || 640;
     canvas.height = videoElement.videoHeight || 480;
 
+    // Add video controls
+    addVideoControls();
+
+    // Start processing
     videoProcessing.active = true;
     requestAnimationFrame(() => processVideoFrame(videoElement, canvas));
 }
 
+
+
+document.addEventListener('keydown', (event) => {
+    switch(event.key.toLowerCase()) {
+        case 'o':
+            setVideoMode('original');
+            break;
+        case 'e':
+            setVideoMode('edge');
+            break;
+    }
+});
 
 function processVideoFrame(video, canvas) {
     if (!videoProcessing.active) {
@@ -1064,135 +1101,70 @@ function processVideoFrame(video, canvas) {
     }
 
     try {
-        const ctx = canvas.getContext('2d');
+        // Make sure video is playing and has dimensions
+        if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
+            requestAnimationFrame(() => processVideoFrame(video, canvas));
+            return;
+        }
 
         // Update canvas size if needed
         if (canvas.width !== video.videoWidth) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            console.log('[VIEWER] Canvas resized to:', canvas.width, 'x', canvas.height);
+            console.debug('[VIEWER] Canvas resized to:', canvas.width, 'x', canvas.height);
         }
 
-        // Draw the video frame
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        console.debug('[VIEWER] Frame drawn to canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Always draw the original frame first
+        ctx.drawImage(video, 0, 0);
+
+        // Only proceed with OpenCV processing if it's ready and edge mode is active
+        if (typeof cv !== 'undefined' && videoProcessing.mode === 'edge') {
+            try {
+                // Create a Mat from the canvas
+                let src = cv.imread(canvas);
+
+                // Create output matrix
+                let dst = new cv.Mat();
+                let gray = new cv.Mat();
+                let blurred = new cv.Mat();
+
+                // Convert to grayscale
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+                // Apply Gaussian blur
+                let ksize = new cv.Size(5, 5);
+                cv.GaussianBlur(gray, blurred, ksize, 0, 0, cv.BORDER_DEFAULT);
+
+                // Apply Canny edge detection
+                cv.Canny(blurred, dst, 50, 150, 3, false);
+
+                // Convert back to RGBA for display
+                cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
+
+                // Show the result on canvas
+                cv.imshow(canvas, dst);
+
+                // Clean up
+                src.delete();
+                dst.delete();
+                gray.delete();
+                blurred.delete();
+
+            } catch (cvError) {
+                console.error('[VIEWER] OpenCV processing error:', cvError);
+                // On error, show original frame
+                ctx.drawImage(video, 0, 0);
+            }
+        }
 
         // Schedule next frame
         requestAnimationFrame(() => processVideoFrame(video, canvas));
 
     } catch (err) {
-        console.error('[VIEWER] Error processing video frame:', err);
-        requestAnimationFrame(() => processVideoFrame(video, canvas));
-    }
-}
-
-
-function processFrame() {
-    if (!cvReady) {
-        console.log('[VIEWER] Waiting for OpenCV to load...');
-        requestAnimationFrame(processFrame);
-        return;
-    }
-    try {
-        const video = document.querySelector('.remote-view');
-        const canvas = document.getElementById('canvasOutput');
-
-        if (!video || !canvas) {
-            console.error('[VIEWER] Video or canvas element not found');
-            return;
-        }
-
-        // Debug video state
-        console.log('[VIEWER] Processing frame:', {
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-            readyState: video.readyState
-        });
-
-        // Make sure video is playing and has dimensions
-        if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
-            requestAnimationFrame(processFrame);
-            return;
-        }
-
-        // Set canvas size to match video
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-
-        // Draw current frame to canvas first
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0);
-
-        // Process with OpenCV
-        try {
-            let src = cv.imread(canvas);
-            let dst = new cv.Mat();
-            let gray = new cv.Mat();
-
-            // Convert the image to grayscale
-            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-            // Apply Gaussian blur
-            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-
-            // Detect edges
-            cv.Canny(gray, dst, 50, 150, 3);
-
-            // Convert back to RGB for display
-            cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
-
-            // Show the processed image
-            cv.imshow('canvasOutput', dst);
-
-            // Clean up
-            src.delete();
-            dst.delete();
-            gray.delete();
-
-            console.log('[VIEWER] Frame processed with OpenCV');
-        } catch (cvError) {
-            console.error('[VIEWER] OpenCV error:', cvError);
-            // If OpenCV fails, at least show the original frame
-            ctx.drawImage(video, 0, 0);
-        }
-
-        // Continue processing
-        requestAnimationFrame(processFrame);
-
-    } catch (err) {
         console.error('[VIEWER] Main processing error:', err);
-        requestAnimationFrame(processFrame);
-    }
-}
-
-
-
-function setupAnalysisControls() {
-    const startButton = document.getElementById('startAnalysis');
-    const stopButton = document.getElementById('stopAnalysis');
-
-    if (startButton && stopButton) {
-        startButton.onclick = () => {
-            console.log('[VIEWER] Starting analysis');
-            videoProcessing.active = true;
-            startButton.disabled = true;
-            stopButton.disabled = false;
-            processFrame();
-        };
-
-        stopButton.onclick = () => {
-            console.log('[VIEWER] Stopping analysis');
-            videoProcessing.active = false;
-            startButton.disabled = false;
-            stopButton.disabled = true;
-
-            // Clear the canvas when stopping
-            const canvas = document.getElementById('canvasOutput');
-            if (canvas) {
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-            }
-        };
+        requestAnimationFrame(() => processVideoFrame(video, canvas));
     }
 }
 
@@ -1278,6 +1250,11 @@ function stopViewer() {
                 frameCount: 0
             }
         };
+
+        // Remove the controls if they exist
+        const controls = document.querySelector('.video-controls');
+        controls?.remove();
+
 
     } catch (e) {
         console.error('[VIEWER] Encountered error stopping', e);
