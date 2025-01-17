@@ -304,15 +304,12 @@ function startAnalysis(video, canvas) {
 
 
 async function startViewer(localView, remoteView, formValues, onStatsReport, remoteMessage) {
-    formValues.enableVideoAnalysis = document.getElementById('enableVideoAnalysis')?.checked ?? false;
-    console.log('[VIEWER] Video analysis enabled:', formValues.enableVideoAnalysis);
-
     try {
         console.log('[VIEWER] startViewer');
         videoProcessing.active = false; // Reset video processing state
 
          // Add OpenCV initialization check
-         if (formValues.enableVideoAnalysis && typeof cv === 'undefined') {
+         if (typeof cv === 'undefined') {
             console.error('[VIEWER] OpenCV.js is not loaded');
             return;
         }
